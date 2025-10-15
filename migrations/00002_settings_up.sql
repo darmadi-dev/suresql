@@ -36,8 +36,8 @@ INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES
 -- Information about user that can be used by the client's project
 -- INSERT INTO _users (username, password, role_name) VALUES ()
 
-INSERT INTO _settings(category, data_type, config_key, int_value) VALUES ("connection", "int", "pool_on", true);
-INSERT INTO _settings(category, data_type, config_key, int_value) VALUES ("connection", "int", "max_pool", 25);
-INSERT INTO _settings(category, data_type, config_key, int_value) VALUES ("token", "int", "token_exp", 360); -- 6 hours
-INSERT INTO _settings(category, data_type, config_key, int_value) VALUES ("token", "int", "refresh_exp", 1440); -- 2 days
-INSERT INTO _settings(category, data_type, config_key, int_value) VALUES ("token", "int", "token_ttl", 5); -- 5 minutes
+INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES ("connection", "int", "pool_on", true);
+INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES ("connection", "int", "max_pool", 25);
+INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES ("token", "int", "token_exp", 360); -- 6 hours
+INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES ("token", "int", "refresh_exp", 1440); -- 2 days
+INSERT INTO _settings(category, data_type, setting_key, int_value) VALUES ("token", "int", "token_ttl", 5); -- 5 minutes
