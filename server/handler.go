@@ -73,6 +73,19 @@ func CreateServer(cnode suresql.SureSQLNode) simplehttp.Server {
 	InitTokenMaps()
 	metrics.StopTimeItPrint(el, "Done")
 
+	// Initialize connection manager and start cleanup routine
+	el = metrics.StartTimeIt("Starting connection cleanup routine...", 0)
+	suresql.InitConnectionManager()
+	// Start cleanup with a background context (will be managed by server lifecycle)
+	go suresql.StartConnectionCleanup(server.Context())
+	metrics.StopTimeItPrint(el, "Done")
+
+	// Initialize and start alert monitoring
+	el = metrics.StartTimeIt("Starting alert monitoring system...", 0)
+	suresql.InitAlertManager()
+	go suresql.StartAlerting(server.Context())
+	metrics.StopTimeItPrint(el, "Done")
+
 	el = metrics.StartTimeIt("Registring endpoints ...", 0)
 	RegisterRoutes(server)
 	metrics.StopTimeItPrint(el, "Done")
@@ -81,6 +94,11 @@ func CreateServer(cnode suresql.SureSQLNode) simplehttp.Server {
 	// IMPORTANT TODO: separate this into SaaS only, SureSQL cloud.
 	el = metrics.StartTimeIt("Registring internal endpoints ...", 0)
 	RegisterInternalRoutes(server)
+	metrics.StopTimeItPrint(el, "Done")
+
+	// Register monitoring and metrics endpoints
+	el = metrics.StartTimeIt("Registring monitoring endpoints ...", 0)
+	RegisterMonitoringRoutes(server)
 	metrics.StopTimeItPrint(el, "Done")
 
 	return server
@@ -155,6 +173,9 @@ func HandleConnect(ctx simplehttp.Context) error {
 			LogAndResponse("password missmatch for user:"+connectReq.Username, err, true)
 	}
 
+	// SECURITY: Clear password immediately after authentication
+	user.Password = ""
+
 	// Copy the configuration from internal connection
 	configCopy := suresql.CurrentNode.InternalConfig
 	// configCopy.Username = user.Username
@@ -163,6 +184,8 @@ func HandleConnect(ctx simplehttp.Context) error {
 	// Create a new database connection with the copied config
 	newDB, err := suresql.NewDatabase(configCopy)
 	if err != nil {
+		// Record failed authentication
+		suresql.Metrics.RecordAuthentication(false)
 		return state.SetError("Failed to create database connection", err, http.StatusInternalServerError).
 			LogAndResponse("failed to create database connection", err, true)
 	}
@@ -174,9 +197,15 @@ func HandleConnect(ctx simplehttp.Context) error {
 	// Add to connection pool if enabled
 	if suresql.CurrentNode.IsPoolAvailable() {
 		suresql.CurrentNode.DBConnections.Put(tokenResponse.Token, 0, newDB)
+		// Record successful connection creation
+		suresql.Metrics.RecordConnectionCreated()
+		suresql.Metrics.RecordAuthentication(true)
 		// state.OnlyLog(fmt.Sprintf("Added new connection to pool, current size: %d/%d", suresql.suresql.CurrentNode.DBConnections.Len(), suresql.CurrentNode.MaxPool), nil, true)
 	} else {
 		err := errors.New("db pool quota exceeded")
+		// Record pool exhaustion
+		suresql.Metrics.RecordPoolExhaustion()
+		suresql.Metrics.RecordAuthentication(false)
 		return state.SetError("Failed to create database connection, quota exceeded", err, http.StatusNotAcceptable).
 			LogAndResponse("cannot create database connection, quota exceeded", nil, true)
 	}
@@ -207,15 +236,55 @@ func HandleRefresh(ctx simplehttp.Context) error {
 	}
 
 	state.User = tokmap.UserName
-	// Generate new tokens using NewRandomTokenIterate with TOKEN_LENGTH_MULTIPLIER
+
+	// SECURITY FIX: Close old connection and create fresh one
+	// Get old connection
+	oldDB, err := suresql.CurrentNode.GetDBConnectionByToken(tokmap.Token)
+	if err == nil {
+		// Try to close if the connection supports it
+		if closer, ok := interface{}(oldDB).(interface{ Close() error }); ok {
+			if closeErr := closer.Close(); closeErr != nil {
+				// Log but don't fail - connection might already be closed
+				simplelog.LogErrorAny("refresh", closeErr, "failed to close old DB connection")
+			} else {
+				// Record successful connection close
+				suresql.Metrics.RecordConnectionClosed()
+			}
+		}
+	}
+
+	// Remove old connection from pool
+	suresql.CurrentNode.DBConnections.Delete(tokmap.Token)
+
+	// Create new database connection
+	configCopy := suresql.CurrentNode.GetInternalConfig()
+	newDB, err := suresql.NewDatabase(configCopy)
+	if err != nil {
+		return state.SetError("Failed to create database connection", err, http.StatusInternalServerError).
+			LogAndResponse("failed to create database connection on refresh", err, true)
+	}
+
+	// Generate new tokens
 	tokenResponse := createNewTokenResponse(UserTable{Username: tokmap.UserName, ID: object.Int(tokmap.UserID, false)})
-	// Remove old refresh token
+
+	// Add new connection to pool with new token
+	if suresql.CurrentNode.IsPoolAvailable() {
+		suresql.CurrentNode.DBConnections.Put(tokenResponse.Token, 0, newDB)
+		// Record successful connection creation and refresh token usage
+		suresql.Metrics.RecordConnectionCreated()
+		suresql.Metrics.RecordRefreshTokenUsed()
+	} else {
+		// Record pool exhaustion
+		suresql.Metrics.RecordPoolExhaustion()
+		return state.SetError("Connection pool full", errors.New("pool quota exceeded"), http.StatusServiceUnavailable).
+			LogAndResponse("cannot create new connection, pool full", nil, true)
+	}
+
+	// Remove old refresh token from store
 	TokenStore.RefreshTokenMap.Delete(refreshReq.Refresh)
-	// Rename the DBConnection to new token from the old token
-	suresql.CurrentNode.RenameDBConnection(tokmap.Token, tokenResponse.Token)
 
 	return state.SetSuccess("Token refreshed successfully", tokenResponse).
-		LogAndResponse("refreshede tokens for user: "+tokmap.UserName, nil, true)
+		LogAndResponse("refreshed tokens for user: "+tokmap.UserName, nil, true)
 
 }
 

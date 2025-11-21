@@ -1,6 +1,7 @@
 package suresql
 
 import (
+	"sync"
 	"time"
 
 	orm "github.com/medatechnology/simpleorm"
@@ -239,6 +240,7 @@ func (c SettingTable) GetValue() interface{} {
 // NOTE: do we need IP? because we can put IP address in the hostname field if we
 // are connecting based on IP.
 type SureSQLNode struct {
+	mu                 sync.RWMutex         // Protects concurrent access to node state
 	InternalConfig     SureSQLDBMSConfig    `json:"internal_config,omitempty"      db:"internal_config"`
 	InternalAPI        string               `json:"internal_api,omitempty"         db:"internal_api"`        // This is for the node internal API (CRUD users)
 	Config             ConfigTable          `json:"settings,omitempty"             db:"settings"`            // Settings for this node, from DB table

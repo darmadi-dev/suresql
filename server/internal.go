@@ -266,7 +266,7 @@ func HandleUpdateUser(ctx simplehttp.Context) error {
 
 	result := suresql.CurrentNode.InternalConnection.ExecOneSQLParameterized(paramSQL)
 	if result.Error != nil {
-		return state.SetError("Failed to update user", err, http.StatusInternalServerError).LogAndResponse("failed to update db", nil, true)
+		return state.SetError("Failed to update user", result.Error, http.StatusInternalServerError).LogAndResponse("failed to update db", nil, true)
 	}
 
 	return state.SetSuccess("Users updated successfully", user).
@@ -301,7 +301,7 @@ func HandleDeleteUser(ctx simplehttp.Context) error {
 
 	result := suresql.CurrentNode.InternalConnection.ExecOneSQLParameterized(paramSQL)
 	if result.Error != nil {
-		return state.SetError("Failed to delete user", err, http.StatusInternalServerError).LogAndResponse("failed to delete from db", nil, true)
+		return state.SetError("Failed to delete user", result.Error, http.StatusInternalServerError).LogAndResponse("failed to delete from db", nil, true)
 	}
 
 	return state.SetSuccess("Users deleted successfully", nil).LogAndResponse(fmt.Sprintf("user %s deleted successfully", username), "ExecOneSQLParameterized", true)

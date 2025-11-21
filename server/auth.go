@@ -87,6 +87,7 @@ func (t TokenStoreStruct) RefreshTokenExist(token string) (*suresql.TokenTable, 
 }
 
 // This read from default _user table which is internal suresql table for username
+// NOTE: Password is NOT cleared in this function - caller must clear it after use
 func userNameExist(username string) (UserTable, error) {
 	// Find user in database
 	condition := orm.Condition{
@@ -103,6 +104,8 @@ func userNameExist(username string) (UserTable, error) {
 
 	// Convert to User struct
 	user = object.MapToStructSlowDB[UserTable](userRecord.Data)
+	// Password is intentionally kept for passwordMatch() validation
+	// Callers MUST clear user.Password immediately after authentication
 	return user, nil
 }
 
@@ -130,9 +133,11 @@ func createNewTokenResponse(user UserTable) suresql.TokenTable {
 	token.RefreshExpiresAt = time.Now().Add(suresql.DEFAULT_REFRESH_EXPIRES_MINUTES)
 
 	// Store tokens in TTL maps with appropriate expiration times
-	// TokenMap.Put(token, DEFAULT_TOKEN_EXPIRATION, user.Username)
-	// RefreshTokenMap.Put(refreshToken, DEFAULT_REFRESH_EXPIRATION, user.Username)
 	TokenStore.SaveToken(token)
+
+	// Record token creation metric
+	suresql.Metrics.RecordTokenCreated()
+
 	// Return tokens in response
 	return token
 }
@@ -172,10 +177,19 @@ func DecryptCredentials(data string, apiKey, clientID string) (*Credentials, err
 func DecodeToken(tokenstring string, config *suresql.SureSQLDBMSConfig) (string, error) {
 	tokenMap, err := encryption.ParseJWEToMap(tokenstring, []byte(config.JWEKey))
 	if err != nil {
+		return "", fmt.Errorf("failed to parse JWE token: %w", err)
 	}
-	if tokenMap[TOKEN_STRING] != "HELLO_TEST" {
-		return "", medaerror.Simple("token invalid:" + tokenMap[TOKEN_STRING])
+
+	// Check if token exists in map
+	tokenValue, exists := tokenMap[TOKEN_STRING]
+	if !exists {
+		return "", medaerror.Simple("token not found in JWE payload")
 	}
-	config.Token = tokenMap[TOKEN_STRING]
+
+	if tokenValue != "HELLO_TEST" {
+		return "", medaerror.Simple("token invalid: " + tokenValue)
+	}
+
+	config.Token = tokenValue
 	return config.Token, nil
 }
